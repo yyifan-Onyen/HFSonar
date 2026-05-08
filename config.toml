@@ -1,0 +1,37 @@
+# HFSonar configuration. Override per-machine via config.local.toml (gitignored).
+
+[poll]
+# How many candidate events each source returns per cycle (before curation).
+trending_limit = 20
+new_models_limit = 30
+daily_papers_limit = 15
+# Watchlist limit is PER ORG — each org in [watchlist] returns up to this many newest models.
+watchlist_limit = 3
+
+[curation]
+# How many events Claude is asked to keep per cycle.
+top_k = 5
+# Minimum likes (or upvotes for papers) for a candidate to even reach the curator.
+min_likes = 5
+
+[watchlist]
+orgs = [
+    "meta-llama",
+    "mistralai",
+    "Qwen",
+    "deepseek-ai",
+    "google",
+    "microsoft",
+    "stabilityai",
+    "black-forest-labs",
+    "nvidia",
+    "anthropic",
+]
+
+[claude]
+# CLI binary on PATH. Override if you keep `claude` somewhere unusual.
+binary = "claude"
+# Per-call timeout in seconds.
+timeout = 180
+# Optional model override; empty string = use the user's default.
+model = ""

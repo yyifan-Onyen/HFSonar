@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime artifacts
+runs/
+state/ledger.jsonl
+state/*.jsonl
+*.log
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+
+# Local secrets / config overrides
+.env
+config.local.toml
