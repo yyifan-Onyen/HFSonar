@@ -13,7 +13,7 @@
 
 HFSonar polls HuggingFace on a schedule, asks the `claude` CLI which signals are worth posting about, then asks it to draft each one. Drafts land in a versioned local queue with full provenance — you read, decide, and publish.
 
-Inspired by [AutoX-AI-Labs/AutoR](https://github.com/AutoX-AI-Labs/AutoR)'s "Python orchestrator + subprocess `claude` CLI as backbone" pattern — adapted from a one-shot research pipeline into a polling loop with persistent dedup.
+A thin Python orchestrator owns the loop, dedup, and on-disk artifacts. Every per-step decision (curation, drafting) is a single `claude -p @file` subprocess call — the LLM is the backbone, the orchestrator is the spine.
 
 ---
 
@@ -103,7 +103,7 @@ https://huggingface.co/meta-llama/Llama-3-8B
 
 ## How Claude is invoked
 
-The pattern, copied from AutoR with the fewest moving parts:
+The pattern, kept to the fewest moving parts:
 
 ```bash
 claude -p @runs/<ts>/prompts/01_curate.prompt.md --output-format json
@@ -170,7 +170,7 @@ HFSonar/
 
 Each one is a knob you can flip — or rip out — when it hurts. Listed so you know what the defaults assume.
 
-- **Subprocess CLI, not the SDK.** `subprocess.run(["claude", "-p", "@file", "--output-format", "json"])`. Same pattern as AutoR. Zero new auth surface; uses your existing Claude Code login and billing.
+- **Subprocess CLI, not the SDK.** `subprocess.run(["claude", "-p", "@file", "--output-format", "json"])`. Zero new auth surface; uses your existing Claude Code login and billing.
 - **Two roles, two prompts.** Curator (JSON) and Writer (markdown). Splitting them keeps prompts small and caps the writer-call count per cycle to `top_k`.
 - **Run dir is the source of truth.** Re-run any failing post with `claude -p @runs/<ts>/prompts/02_write_NN.prompt.md`.
 - **JSONL ledger, not SQLite.** `git diff`-able, `tail -f`-able, dirt simple.
@@ -200,7 +200,7 @@ Each one is a knob you can flip — or rip out — when it hurts. Listed so you 
 ## What's intentionally **not** here yet
 
 - **No publisher.** Drafts land on disk only. Adding one = one new module.
-- **No web UI / dashboard.** AutoR has Studio; HFSonar's surface is the filesystem and `list`.
+- **No web UI / dashboard.** HFSonar's surface is the filesystem and `list`.
 - **No image / video preview generation** for vision-model releases.
 - **No multi-language drafting.** English-only writer prompt for now.
 - **No reviewer-agent gate** for auto-publishing. Wire this when a real publisher arrives.
@@ -211,6 +211,5 @@ Each is one module + one config flag away.
 
 ## Credits
 
-- [AutoX-AI-Labs/AutoR](https://github.com/AutoX-AI-Labs/AutoR) — the subprocess-as-backbone pattern this project is built on
 - [HuggingFace Hub](https://huggingface.co) — the signal we listen to
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) — the writer
