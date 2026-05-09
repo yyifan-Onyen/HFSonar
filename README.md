@@ -1,148 +1,216 @@
+<div align="center">
+
 # HFSonar
 
-Real-time HuggingFace monitor with the Claude Code CLI as its writing/curation
-backbone. Inspired by [AutoX-AI-Labs/AutoR](https://github.com/AutoX-AI-Labs/AutoR)'s
-"Python orchestrator subprocess-invokes `claude`" pattern, adapted from a
-one-shot research pipeline into a polling loop with persistent dedup.
+**Watch HuggingFace. Let Claude pick what's worth talking about. Get drafts on disk, ready to publish.**
 
-Each cycle:
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org)
+[![Backbone — Claude Code](https://img.shields.io/badge/backbone-Claude_Code_CLI-DD7747.svg)](https://docs.claude.com/en/docs/claude-code)
+[![Tests 11/11](https://img.shields.io/badge/tests-11%2F11_passing-2EA043.svg)](#tests)
+[![Status — MVP](https://img.shields.io/badge/status-MVP-9CA3AF.svg)](#whats-intentionally-not-here-yet)
 
-1. **Fetch** — pull from 4 HuggingFace sources in parallel:
-   - Trending models (`huggingface_hub.list_models(sort="trendingScore")`)
-   - Newly-created models (`sort="createdAt"`)
-   - HF Daily Papers (`huggingface.co/api/daily_papers`)
-   - Watchlist orgs (per-org newest releases for `meta-llama`, `mistralai`, `Qwen`,
-     `deepseek-ai`, `google`, `microsoft`, `stabilityai`, `black-forest-labs`,
-     `nvidia`, `anthropic`)
-2. **Dedup** — drop anything already in `state/ledger.jsonl`, drop within-cycle
-   duplicates, drop low-signal items (`min_likes` floor; watchlist + papers bypass it).
-3. **Curate** — Claude (via `claude -p @prompt --output-format json`) is given the
-   candidate list and asked to pick the top K worth posting, with a one-sentence
-   "angle" for each.
-4. **Write** — Claude drafts a markdown post for each chosen item using a
-   per-platform style prompt + the project-local skills in `.claude/skills/guides/`.
-5. **Save** — drafts land in `runs/<UTC-ts>/posts/*.md` with frontmatter; full
-   record of the cycle in `runs/<UTC-ts>/run_manifest.json`. Ledger gets the new IDs.
+</div>
 
-No social platform is contacted. v1 is a pure local dry-run queue — you copy a
-draft, decide if it's good, and post it yourself. Adding a real publisher
-(Discord webhook → X API → etc.) is a single new module behind a `Publisher`
-interface; not in v1.
+HFSonar polls HuggingFace on a schedule, asks the `claude` CLI which signals are worth posting about, then asks it to draft each one. Drafts land in a versioned local queue with full provenance — you read, decide, and publish.
 
-## Install
+Inspired by [AutoX-AI-Labs/AutoR](https://github.com/AutoX-AI-Labs/AutoR)'s "Python orchestrator + subprocess `claude` CLI as backbone" pattern — adapted from a one-shot research pipeline into a polling loop with persistent dedup.
+
+---
+
+## How a cycle runs
+
+```mermaid
+flowchart LR
+    A["4 HF sources<br/>(trending • new • papers • watchlist)"] --> B["Dedup<br/>(state/ledger.jsonl)"]
+    B --> C["Curator<br/>claude -p @01_curate.md<br/>picks top-K + angle"]
+    C --> D["Writer<br/>claude -p @02_write.md<br/>drafts each post"]
+    D --> E["runs/&lt;ts&gt;/posts/*.md"]
+    D --> F[("state/ledger.jsonl<br/>(append-only)")]
+```
+
+Every prompt sent to Claude is saved verbatim under `runs/<ts>/prompts/`, so a bad post can be debugged by replaying the exact same prompt.
+
+---
+
+## Quick start
+
+```bash
+git clone https://github.com/yyifan-Onyen/HFSonar.git && cd HFSonar
+python3.13 -m venv .venv && .venv/bin/pip install -r requirements.txt
+
+.venv/bin/python main.py poll --fake-llm   # dry run, zero tokens
+.venv/bin/python main.py poll              # real Claude (~$0.30–$1 per cycle)
+.venv/bin/python main.py loop --interval 3600   # forever, hourly
+.venv/bin/python main.py list              # what's been run
+```
 
 Requires **Python 3.11+** (uses stdlib `tomllib`) and the [`claude` CLI](https://docs.claude.com/en/docs/claude-code) on PATH.
 
-```bash
-python3.13 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+---
+
+## What gets monitored
+
+| Source           | Where it comes from                           | Bypasses `min_likes`? |
+| ---------------- | --------------------------------------------- | :--------------------:|
+| Trending models  | `list_models(sort="trendingScore")`           |                       |
+| New models       | `list_models(sort="createdAt")`               |                       |
+| Daily Papers     | `huggingface.co/api/daily_papers`             | yes                   |
+| Watchlist orgs   | `list_models(author=org, sort="createdAt")`   | yes                   |
+
+Default watchlist (edit `config.toml`): `meta-llama`, `mistralai`, `Qwen`, `deepseek-ai`, `google`, `microsoft`, `stabilityai`, `black-forest-labs`, `nvidia`, `anthropic`.
+
+---
+
+## What gets produced
+
+```
+runs/20260508T222739_145839Z/
+├── prompts/
+│   ├── 01_curate.prompt.md          # exact text sent to claude
+│   ├── 02_write_01.prompt.md
+│   ├── 02_write_02.prompt.md
+│   └── 02_write_03.prompt.md
+├── posts/
+│   ├── 01__trending_models__deepseek-ai__DeepSeek-V4-Pro.md
+│   ├── 02__daily_papers__2605.06627.md
+│   └── 03__watchlist__Qwen__Qwen3-Next-7B.md
+└── run_manifest.json                # candidates, curator output, post paths
 ```
 
-## Use
+Every post comes with structured frontmatter — provenance is preserved, search and indexing are trivial:
 
-```bash
-# Single cycle, real Claude
-.venv/bin/python main.py poll
+```markdown
+---
+source: trending_models
+event_id: meta-llama/Llama-3-8B
+url: https://huggingface.co/meta-llama/Llama-3-8B
+author: meta-llama
+likes: 2453
+created_at: 2026-05-03T00:33:24+00:00
+angle: 'first Apache-2.0 70B model to clear MMLU 80'
+generated_at: 2026-05-08T22:27:40+00:00
+---
 
-# Single cycle, deterministic stub (zero tokens — for dev/testing)
-.venv/bin/python main.py poll --fake-llm
+# Hook line — the concrete novelty
 
-# Forever, hourly
-.venv/bin/python main.py loop --interval 3600
+Body paragraph or bullets, written by the Claude Writer using the
+project-local style guides in .claude/skills/guides/.
 
-# What's been run
-.venv/bin/python main.py list
+https://huggingface.co/meta-llama/Llama-3-8B
 ```
 
-To run forever in the background, just `nohup` it or use `screen`/`tmux`:
+---
+
+## How Claude is invoked
+
+The pattern, copied from AutoR with the fewest moving parts:
+
 ```bash
-nohup .venv/bin/python main.py loop --interval 3600 > hfsonar.log 2>&1 &
+claude -p @runs/<ts>/prompts/01_curate.prompt.md --output-format json
 ```
+
+`-p @file` lets the CLI read the prompt from disk (cache-friendly, replayable). `--output-format json` returns one envelope with `result` plus token/cost metadata, which the operator parses cleanly. No tool use, no streaming, no permission bypass — Claude only emits text.
+
+Want to swap to Codex or another LLM CLI? Add a class implementing the `Operator` protocol in [`src/operator.py`](src/operator.py). Source adapters, prompts, ledger, orchestrator are unchanged.
+
+---
 
 ## Layout
 
 ```
 HFSonar/
-├── main.py                        # CLI: poll / loop / list
-├── config.toml                    # tunables (limits, watchlist orgs, claude model)
+├── main.py                       # CLI: poll | loop | list
+├── config.toml                   # tunables + watchlist orgs
 ├── requirements.txt
 ├── src/
-│   ├── events.py                  # normalized Event dataclass + dedup_key
-│   ├── ledger.py                  # append-only JSONL, set-backed in-memory
-│   ├── operator.py                # ClaudeOperator (subprocess) + FakeOperator
-│   ├── orchestrator.py            # the cycle: fetch → filter → curate → write → save
+│   ├── events.py                 # Event dataclass + dedup_key
+│   ├── ledger.py                 # JSONL ledger, set-backed
+│   ├── operator.py               # ClaudeOperator + FakeOperator
+│   ├── orchestrator.py           # the cycle
 │   ├── prompts/
-│   │   ├── 01_curate.md           # template w/ {{PLACEHOLDERS}}
+│   │   ├── 01_curate.md
 │   │   └── 02_write_post.md
 │   └── sources/
-│       ├── base.py                # Source ABC, helpers
-│       ├── _hf_common.py          # ModelInfo → Event normalizer
+│       ├── _hf_common.py
 │       ├── trending_models.py
 │       ├── new_models.py
 │       ├── daily_papers.py
 │       └── watchlist.py
-├── .claude/skills/guides/         # auto-loaded by claude in this repo
+├── .claude/skills/guides/        # auto-loaded by claude in this repo
 │   ├── ai-news-tone.md
 │   ├── post-formatting.md
 │   └── hf-context.md
-├── tests/                         # 11 pytest tests, all token-free
-├── state/ledger.jsonl             # gitignored; persists across runs
-└── runs/                          # gitignored; one dir per cycle
-    └── 20YY...Z/
-        ├── prompts/01_curate.prompt.md
-        ├── prompts/02_write_NN.prompt.md
-        ├── posts/NN__source__safe-id.md
-        └── run_manifest.json
+├── tests/                        # 11 token-free pytest tests
+├── state/ledger.jsonl            # gitignored — persists across runs
+└── runs/<ts>/                    # gitignored — one dir per cycle
 ```
 
-## Decisions locked in (challenge any of these)
+---
 
-- **Python 3.11+, no SDK.** Just `subprocess.run(["claude", "-p", "@file", "--output-format", "json"])`. Same pattern as AutoR.
-- **Two Claude roles, one prompt template each.** Curator (JSON output) and Writer (markdown). Splitting them keeps each prompt small and lets us cap how many writer calls happen per cycle.
-- **Run dir is the source of truth.** Every prompt sent to Claude is saved verbatim. Re-run the same prompt with `claude -p @runs/.../prompts/02_write_03.prompt.md` to debug a bad post.
-- **JSONL ledger, not SQLite.** `git diff`-able, `tail -f`-able, dirt simple. v1 doesn't need indexes.
-- **Local dry-run queue, no publisher.** Adding X/Discord/Telegram is a single `Publisher` module + a CLI flag. Out of scope until you actually want it.
-- **`min_likes=5` floor + watchlist/papers bypass.** Keeps the curator from drowning in 30 spam re-uploads but never hides a release from a tracked org.
-- **Polling cadence default 1h.** Daily Papers refreshes once a day; trending and new releases drift hourly. Tighter than 1h is wasteful.
+## Configuration
+
+`config.toml` (override per machine via `config.local.toml`):
+
+| Section       | Key                  | Default                      | Meaning                                          |
+| ------------- | -------------------- | ---------------------------- | ------------------------------------------------ |
+| `[poll]`      | `trending_limit`     | `20`                         | candidates pulled from trending per cycle        |
+| `[poll]`      | `new_models_limit`   | `30`                         | candidates pulled from newest per cycle          |
+| `[poll]`      | `daily_papers_limit` | `15`                         | candidates pulled from daily papers per cycle    |
+| `[poll]`      | `watchlist_limit`    | `3`                          | newest models pulled **per org**                 |
+| `[curation]`  | `top_k`              | `5`                          | max posts the curator may keep                   |
+| `[curation]`  | `min_likes`          | `5`                          | floor for trending/new (papers + watchlist skip) |
+| `[watchlist]` | `orgs`               | 10 labs                      | who to track                                     |
+| `[claude]`    | `binary`             | `"claude"`                   | CLI on PATH                                      |
+| `[claude]`    | `timeout`            | `180`                        | per-call seconds                                 |
+| `[claude]`    | `model`              | `""` (use Claude Code default) | override per cycle                              |
+
+---
+
+## Decisions locked in
+
+Each one is a knob you can flip — or rip out — when it hurts. Listed so you know what the defaults assume.
+
+- **Subprocess CLI, not the SDK.** `subprocess.run(["claude", "-p", "@file", "--output-format", "json"])`. Same pattern as AutoR. Zero new auth surface; uses your existing Claude Code login and billing.
+- **Two roles, two prompts.** Curator (JSON) and Writer (markdown). Splitting them keeps prompts small and caps the writer-call count per cycle to `top_k`.
+- **Run dir is the source of truth.** Re-run any failing post with `claude -p @runs/<ts>/prompts/02_write_NN.prompt.md`.
+- **JSONL ledger, not SQLite.** `git diff`-able, `tail -f`-able, dirt simple.
+- **Local dry-run queue, no publisher.** Adding a Discord webhook / X / Telegram client is one new module behind a `Publisher` interface. Out of scope for v1.
+- **`min_likes=5` floor + watchlist/papers bypass.** Stops 30 spam re-uploads from drowning the curator, but never hides a tracked-org release.
+- **Polling cadence default 1h.** Daily Papers refreshes once a day; trending and new releases drift hourly. Tighter is wasteful.
+
+---
 
 ## Tests
 
 ```bash
 .venv/bin/pytest -q
+# .........                                                       [100%]
+# 11 passed in 0.05s
 ```
 
-Eleven tests covering the ledger, event round-tripping, curator-output parsing
-(handles plain JSON, fenced JSON, and JSON embedded in prose), and a full
-end-to-end cycle using the FakeOperator + a stub source set.
+| File                              | Covers                                                              |
+| --------------------------------- | ------------------------------------------------------------------- |
+| `test_ledger.py`                  | round-trip, idempotency, `filter_unseen`                            |
+| `test_events.py`                  | dedup key, dict round-trip, unknown-key tolerance                   |
+| `test_curator_parse.py`           | plain JSON, fenced JSON, JSON-in-prose, garbage input               |
+| `test_orchestrator_fake.py`       | end-to-end cycle with FakeOperator + stub sources, dedup on round 2 |
 
-## How a real run looks
+---
 
-```
-$ .venv/bin/python main.py poll --fake-llm
-... source trending_models returned 20 events
-... source new_models returned 30 events
-... source daily_papers returned 15 events
-... source watchlist returned 30 events
-... candidates after dedup+min_likes: 67 (out of 95 total)
-... curator picked 3 items
-... wrote 3 posts to runs/.../
+## What's intentionally **not** here yet
 
-run complete: runs/20260508T222739_145839Z
-posts written: 3
-  - runs/.../posts/01__trending_models__SulphurAI__Sulphur-2-base.md
-  - runs/.../posts/02__trending_models__deepseek-ai__DeepSeek-V4-Pro.md
-  - runs/.../posts/03__trending_models__Zyphra__ZAYA1-8B.md
-```
+- **No publisher.** Drafts land on disk only. Adding one = one new module.
+- **No web UI / dashboard.** AutoR has Studio; HFSonar's surface is the filesystem and `list`.
+- **No image / video preview generation** for vision-model releases.
+- **No multi-language drafting.** English-only writer prompt for now.
+- **No reviewer-agent gate** for auto-publishing. Wire this when a real publisher arrives.
 
-## What's intentionally NOT here (yet)
+Each is one module + one config flag away.
 
-- **No publisher.** Drafts land on disk only.
-- **No web UI / dashboard.** AutoR has a Studio; HFSonar's surface is just the
-  filesystem and a `list` subcommand.
-- **No image/video preview generation** for vision-model releases.
-- **No multi-language post drafting.** English-only voice in the writer prompt;
-  bilingual would be a second template + a curator hint.
-- **No reviewer-agent / auto-publish gate.** AutoR has `--full-auto` with a
-  reviewer agent; HFSonar would add this when we wire a real publisher.
+---
 
-Each is one module + one config flag away if/when you want it.
+## Credits
+
+- [AutoX-AI-Labs/AutoR](https://github.com/AutoX-AI-Labs/AutoR) — the subprocess-as-backbone pattern this project is built on
+- [HuggingFace Hub](https://huggingface.co) — the signal we listen to
+- [Claude Code](https://docs.claude.com/en/docs/claude-code) — the writer
