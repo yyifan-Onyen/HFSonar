@@ -11,9 +11,38 @@
 
 </div>
 
-HFSonar polls HuggingFace on a schedule, asks the `claude` CLI which signals are worth posting about, then asks it to draft each one. Drafts land in a versioned local queue with full provenance — you read, decide, and publish.
+## Overview
 
-A thin Python orchestrator owns the loop, dedup, and on-disk artifacts. Every per-step decision (curation, drafting) is a single `claude -p @file` subprocess call — the LLM is the backbone, the orchestrator is the spine.
+HFSonar is a scheduled agent that watches the HuggingFace ecosystem and produces post-ready drafts. Every cycle:
+
+1. Pulls fresh signals from four feeds — **trending models**, **brand-new releases**, the **Daily Papers** stream, and a configurable **watchlist of orgs**.
+2. Drops anything already in the local ledger so nothing gets drafted twice.
+3. Hands the survivors to **Claude** — first to **curate** the few worth posting, then to **draft** each one in markdown.
+4. Saves the drafts plus the full prompt/candidate trail to `runs/<UTC-ts>/`.
+
+A thin Python orchestrator owns the loop, dedup, and on-disk artifacts. Each per-step decision is a single `claude -p @file` subprocess call — the LLM is the backbone, the orchestrator is the spine.
+
+---
+
+## Highlights
+
+- **Claude Code is the backbone — no SDK, no extra auth.** One `subprocess.run(["claude", "-p", "@file", ...])` per step. Inherits your existing Claude Code login and billing.
+- **Four HuggingFace feeds, one shape.** Trending, new releases, Daily Papers, and per-org watchlist all normalize to a single `Event` dataclass.
+- **Persistent dedup across runs.** A JSONL ledger guarantees no model or paper is ever drafted twice.
+- **Fully replayable.** Every prompt sent to Claude is preserved verbatim under `runs/<ts>/prompts/`. Re-run a bad post by re-pointing `claude` at the same file.
+- **`--fake-llm` mode.** Deterministic stub for token-free dev, CI, and smoke tests.
+- **Project-local skills.** `.claude/skills/guides/` ships with HF-specific tone, format, and context guidance that Claude auto-loads.
+- **Zero external API surface.** No publishing, no webhooks, no third-party credentials. Drafts live in `runs/`; you decide what to do with them.
+
+---
+
+## Why HFSonar
+
+The HuggingFace firehose is too loud to follow by hand. Hundreds of new models per day. A fresh batch of Daily Papers every morning. Your watched orgs ship without warning. By the time you scroll the timeline and find the one release worth talking about, you're already a day late.
+
+HFSonar runs while you sleep. It pulls the firehose, drops what you've already seen, lets Claude triage what's actually worth a post, and leaves you with three or five short drafts on disk. You spend a minute per draft deciding *ship / kill / edit* — not an hour scrolling.
+
+It's deliberately a **queue**, not an **autoposter**. The hard part of social posting isn't the pipes; it's the judgment call. HFSonar does the discovery and the first draft. You keep the ship/no-ship decision.
 
 ---
 
