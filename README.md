@@ -1,6 +1,6 @@
 <div align="center">
 
-# HFSonar
+# 📡 HFSonar
 
 **Watch HuggingFace. Let Claude pick what's worth talking about. Get drafts on disk, ready to publish.**
 
@@ -11,7 +11,7 @@
 
 </div>
 
-## Overview
+## 🔭 Overview
 
 HFSonar is a scheduled agent that watches the HuggingFace ecosystem and produces post-ready drafts. Every cycle:
 
@@ -24,19 +24,19 @@ A thin Python orchestrator owns the loop, dedup, and on-disk artifacts. Each per
 
 ---
 
-## Highlights
+## ✨ Highlights
 
-- **Claude Code is the backbone — no SDK, no extra auth.** One `subprocess.run(["claude", "-p", "@file", ...])` per step. Inherits your existing Claude Code login and billing.
-- **Four HuggingFace feeds, one shape.** Trending, new releases, Daily Papers, and per-org watchlist all normalize to a single `Event` dataclass.
-- **Persistent dedup across runs.** A JSONL ledger guarantees no model or paper is ever drafted twice.
-- **Fully replayable.** Every prompt sent to Claude is preserved verbatim under `runs/<ts>/prompts/`. Re-run a bad post by re-pointing `claude` at the same file.
-- **`--fake-llm` mode.** Deterministic stub for token-free dev, CI, and smoke tests.
-- **Project-local skills.** `.claude/skills/guides/` ships with HF-specific tone, format, and context guidance that Claude auto-loads.
-- **Zero external API surface.** No publishing, no webhooks, no third-party credentials. Drafts live in `runs/`; you decide what to do with them.
+- 🧠 **Claude Code as the backbone** — no SDK, no new auth; piggybacks on your existing Claude Code login.
+- 📡 **Four HuggingFace feeds in one cycle** — trending, new releases, Daily Papers, watchlist orgs.
+- 🗂️ **Never drafts the same thing twice** — JSONL ledger persists across runs.
+- 🔁 **Every prompt is replayable** — re-feed a saved prompt into `claude` to debug a bad post.
+- 🧪 **Token-free dev mode** — `--fake-llm` runs the full pipeline with zero API spend.
+- 📚 **Ships with HF writing skills** — tone, format, and ecosystem context that Claude auto-loads.
+- 🔐 **No external API surface** — no webhooks, no credentials, no surprises. Drafts stay on disk until you act.
 
 ---
 
-## Why HFSonar
+## 💡 Why HFSonar
 
 The HuggingFace firehose is too loud to follow by hand. Hundreds of new models per day. A fresh batch of Daily Papers every morning. Your watched orgs ship without warning. By the time you scroll the timeline and find the one release worth talking about, you're already a day late.
 
@@ -46,7 +46,7 @@ It's deliberately a **queue**, not an **autoposter**. The hard part of social po
 
 ---
 
-## How a cycle runs
+## 🔄 How a cycle runs
 
 ```mermaid
 flowchart LR
@@ -61,7 +61,7 @@ Every prompt sent to Claude is saved verbatim under `runs/<ts>/prompts/`, so a b
 
 ---
 
-## Quick start
+## 🚀 Quick start
 
 ```bash
 git clone https://github.com/yyifan-Onyen/HFSonar.git && cd HFSonar
@@ -77,7 +77,7 @@ Requires **Python 3.11+** (uses stdlib `tomllib`) and the [`claude` CLI](https:/
 
 ---
 
-## What gets monitored
+## 👀 What gets monitored
 
 | Source           | Where it comes from                           | Bypasses `min_likes`? |
 | ---------------- | --------------------------------------------- | :--------------------:|
@@ -90,7 +90,7 @@ Default watchlist (edit `config.toml`): `meta-llama`, `mistralai`, `Qwen`, `deep
 
 ---
 
-## What gets produced
+## 📦 What gets produced
 
 ```
 runs/20260508T222739_145839Z/
@@ -130,7 +130,7 @@ https://huggingface.co/meta-llama/Llama-3-8B
 
 ---
 
-## How Claude is invoked
+## 🧠 How Claude is invoked
 
 The pattern, kept to the fewest moving parts:
 
@@ -144,7 +144,7 @@ Want to swap to Codex or another LLM CLI? Add a class implementing the `Operator
 
 ---
 
-## Layout
+## 📁 Layout
 
 ```
 HFSonar/
@@ -176,7 +176,7 @@ HFSonar/
 
 ---
 
-## Configuration
+## ⚙️ Configuration
 
 `config.toml` (override per machine via `config.local.toml`):
 
@@ -195,7 +195,7 @@ HFSonar/
 
 ---
 
-## Decisions locked in
+## 🔒 Decisions locked in
 
 Each one is a knob you can flip — or rip out — when it hurts. Listed so you know what the defaults assume.
 
@@ -209,7 +209,7 @@ Each one is a knob you can flip — or rip out — when it hurts. Listed so you 
 
 ---
 
-## Tests
+## 🧪 Tests
 
 ```bash
 .venv/bin/pytest -q
@@ -226,7 +226,7 @@ Each one is a knob you can flip — or rip out — when it hurts. Listed so you 
 
 ---
 
-## What's intentionally **not** here yet
+## 🚧 What's intentionally **not** here yet
 
 - **No publisher.** Drafts land on disk only. Adding one = one new module.
 - **No web UI / dashboard.** HFSonar's surface is the filesystem and `list`.
@@ -238,7 +238,7 @@ Each is one module + one config flag away.
 
 ---
 
-## Credits
+## 🙏 Credits
 
 - [HuggingFace Hub](https://huggingface.co) — the signal we listen to
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) — the writer
