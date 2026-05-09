@@ -1,11 +1,13 @@
-"""End-to-end pipeline: fetch → dedup → curate (Claude) → write (Claude) → save.
+"""End-to-end pipeline:
+    fetch → dedup → CURATE (claude) → RESEARCH AUTHORS (claude+web) → DRAFT OUTREACH (claude) → save
 
 A run produces:
     runs/<UTC-ts>/
         prompts/01_curate.prompt.md
-        prompts/02_write_<n>.prompt.md
-        posts/<n>__<source>__<safe_id>.md      (final draft posts, with frontmatter)
-        run_manifest.json                      (full event/curation record)
+        prompts/02_research_<n>.prompt.md
+        prompts/03_outreach_<n>.prompt.md
+        outreach/<n>__<source>__<safe_id>.md       (final draft outreach, with frontmatter)
+        run_manifest.json                          (full event/curation/research record)
 """
 
 from __future__ import annotations
@@ -13,12 +15,11 @@ from __future__ import annotations
 import json
 import logging
 import re
-import sys
 import tomllib
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from .events import Event
 from .ledger import Ledger
@@ -73,11 +74,10 @@ class Config:
         )
 
 
-# ---------- pipeline ----------
+# ---------- pipeline helpers ----------
 
 
 def _utc_run_id() -> str:
-    # Microsecond precision so back-to-back cycles don't collide on the same dir.
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
 
 
@@ -113,26 +113,38 @@ def _render(template: str, vars: dict[str, str]) -> str:
 
 
 def _parse_curator_output(text: str) -> list[dict]:
-    """The curator should reply with a JSON object {"chosen": [...]}.
-    Be liberal in what we accept: strip code fences, find the first {...} block."""
+    """Curator returns {"chosen": [...]}. Tolerate fenced JSON / prose-embedded JSON."""
+    return _extract_json_object(text).get("chosen") or []
+
+
+def _parse_research_output(text: str) -> dict[str, Any]:
+    """Researcher returns the author-research JSON object directly."""
+    obj = _extract_json_object(text)
+    if not obj.get("primary_author"):
+        obj.setdefault("primary_author", {})
+        obj.setdefault("coauthors", [])
+        obj.setdefault("notes", "")
+    return obj
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
     if not text:
-        return []
+        return {}
     s = text.strip()
     if s.startswith("```"):
-        # strip ```json ... ```
         s = re.sub(r"^```[a-zA-Z]*\n", "", s)
         s = re.sub(r"\n```$", "", s)
-    # find the first {...}
     match = re.search(r"\{.*\}", s, re.DOTALL)
     if not match:
-        return []
+        return {}
     try:
         payload = json.loads(match.group(0))
     except json.JSONDecodeError:
-        logger.warning("curator output was not valid JSON; got: %s", s[:200])
-        return []
-    chosen = payload.get("chosen") or []
-    return [c for c in chosen if isinstance(c, dict)]
+        logger.warning("LLM output was not valid JSON; got: %s", s[:200])
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return payload
 
 
 # ---------- the run ----------
@@ -170,11 +182,10 @@ def filter_candidates(
     kept: list[Event] = []
     for e in events:
         if e.dedup_key in seen_keys:
-            continue  # within-cycle dup across sources
+            continue
         seen_keys.add(e.dedup_key)
         if ledger.has(e.dedup_key):
             continue
-        # Watchlist and Daily Papers are always considered, regardless of like floor.
         if e.source in ("watchlist", "daily_papers"):
             kept.append(e)
             continue
@@ -183,31 +194,33 @@ def filter_candidates(
     return kept
 
 
-def write_post_file(
+def write_outreach_file(
     run_dir: Path,
     idx: int,
     event: Event,
     angle: str,
+    research: dict[str, Any],
     body: str,
 ) -> Path:
-    posts_dir = run_dir / "posts"
-    posts_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = run_dir / "outreach"
+    out_dir.mkdir(parents=True, exist_ok=True)
     safe_id = _safe_filename(event.event_id.replace("/", "__"))
     fname = f"{idx:02d}__{event.source}__{safe_id}.md"
-    path = posts_dir / fname
+    path = out_dir / fname
 
-    frontmatter = (
-        "---\n"
-        f"source: {event.source}\n"
-        f"event_id: {event.event_id}\n"
-        f"url: {event.url}\n"
-        f"author: {event.author}\n"
-        f"likes: {event.likes}\n"
-        f"created_at: {event.created_at}\n"
-        f"angle: {angle.replace(chr(10), ' ').strip()!r}\n"
-        f"generated_at: {datetime.now(timezone.utc).isoformat()}\n"
-        "---\n\n"
-    )
+    # Frontmatter is a JSON-blob style, easy to parse later.
+    frontmatter_dict = {
+        "source": event.source,
+        "event_id": event.event_id,
+        "event_url": event.url,
+        "event_title": event.title,
+        "angle": angle.strip(),
+        "primary_author": research.get("primary_author", {}),
+        "coauthors": research.get("coauthors", []),
+        "research_notes": research.get("notes", ""),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    frontmatter = "---\n" + json.dumps(frontmatter_dict, indent=2, ensure_ascii=False) + "\n---\n\n"
     path.write_text(frontmatter + body.strip() + "\n", encoding="utf-8")
     return path
 
@@ -235,7 +248,7 @@ def run_cycle(
         len(events),
     )
 
-    manifest = {
+    manifest: dict[str, Any] = {
         "run_id": run_id,
         "started_at": datetime.now(timezone.utc).isoformat(),
         "config": asdict(cfg),
@@ -247,7 +260,7 @@ def run_cycle(
         "events_by_source": {},
         "candidates": [c.to_dict() for c in candidates],
         "curator": {"raw": "", "chosen": []},
-        "posts": [],
+        "outreach": [],
     }
     by_source: dict[str, int] = {}
     for e in events:
@@ -255,7 +268,7 @@ def run_cycle(
     manifest["events_by_source"] = by_source
 
     if not candidates:
-        logger.info("no fresh candidates — skipping curator and writer.")
+        logger.info("no fresh candidates — skipping curator, research, and outreach.")
         manifest["finished_at"] = datetime.now(timezone.utc).isoformat()
         (run_dir / "run_manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -282,11 +295,13 @@ def run_cycle(
     manifest["curator"]["chosen"] = chosen_records
     logger.info("curator picked %d items", len(chosen_records))
 
-    # Map dedup_key -> Event for fast lookup
     by_key = {e.dedup_key: e for e in candidates}
-    # 3. Write each chosen post
-    write_template = (repo_root / "src/prompts/02_write_post.md").read_text(encoding="utf-8")
-    posts_written: list[dict] = []
+
+    # 3 + 4. For each chosen item: research authors → draft outreach
+    research_template = (repo_root / "src/prompts/02_research_author.md").read_text(encoding="utf-8")
+    outreach_template = (repo_root / "src/prompts/03_draft_outreach.md").read_text(encoding="utf-8")
+
+    drafts: list[dict[str, Any]] = []
     for i, rec in enumerate(chosen_records[: cfg.top_k], start=1):
         key = rec.get("event_dedup_key", "")
         angle = rec.get("angle", "")
@@ -294,42 +309,71 @@ def run_cycle(
         if not evt:
             logger.warning("curator referenced unknown key: %s", key)
             continue
-        write_prompt = _render(
-            write_template,
+
+        # 3. Research the author(s) — Claude with WebFetch / WebSearch
+        research_prompt = _render(
+            research_template,
             {
                 "SOURCE": evt.source,
                 "TITLE": evt.title,
                 "URL": evt.url,
                 "AUTHOR": evt.author or "(unknown)",
+                "CREATED_AT": evt.created_at or "(unknown)",
+                "SUMMARY": evt.summary or "(no summary)",
+            },
+        )
+        research_prompt_path = run_dir / "prompts" / f"02_research_{i:02d}.prompt.md"
+        research_prompt_path.write_text(research_prompt, encoding="utf-8")
+        research_result: OperatorResult = operator.run(
+            research_prompt_path,
+            label=f"research/{i}",
+            tools=["WebFetch", "WebSearch"],
+        )
+        research_obj = _parse_research_output(research_result.text)
+
+        # 4. Draft the outreach message
+        outreach_prompt = _render(
+            outreach_template,
+            {
+                "SOURCE": evt.source,
+                "TITLE": evt.title,
+                "URL": evt.url,
                 "LIKES": str(evt.likes),
                 "CREATED_AT": evt.created_at or "(unknown)",
                 "TAGS": ", ".join(evt.tags) if evt.tags else "(none)",
                 "SUMMARY": evt.summary or "(no summary)",
                 "ANGLE": angle or "(no angle provided)",
+                "AUTHOR_JSON": json.dumps(research_obj, indent=2, ensure_ascii=False),
             },
         )
-        prompt_path = run_dir / "prompts" / f"02_write_{i:02d}.prompt.md"
-        prompt_path.write_text(write_prompt, encoding="utf-8")
-        result: OperatorResult = operator.run(prompt_path, label=f"write/{i}")
-        body = result.text or "(empty draft)"
-        post_path = write_post_file(run_dir, i, evt, angle, body)
-        ledger.record(key, source=evt.source, note=f"posted in {run_id}")
-        posts_written.append(
+        outreach_prompt_path = run_dir / "prompts" / f"03_outreach_{i:02d}.prompt.md"
+        outreach_prompt_path.write_text(outreach_prompt, encoding="utf-8")
+        outreach_result: OperatorResult = operator.run(outreach_prompt_path, label=f"outreach/{i}")
+        body = outreach_result.text or "(empty draft)"
+
+        out_path = write_outreach_file(run_dir, i, evt, angle, research_obj, body)
+        ledger.record(key, source=evt.source, note=f"outreach drafted in {run_id}")
+        drafts.append(
             {
                 "index": i,
                 "event_dedup_key": key,
-                "post_path": str(post_path.relative_to(repo_root)),
+                "outreach_path": str(out_path.relative_to(repo_root)),
                 "angle": angle,
+                "primary_author_name": (
+                    research_obj.get("primary_author", {}).get("name", "")
+                    if isinstance(research_obj, dict)
+                    else ""
+                ),
             }
         )
 
-    manifest["posts"] = posts_written
+    manifest["outreach"] = drafts
     manifest["finished_at"] = datetime.now(timezone.utc).isoformat()
     manifest["totals"]["ledger_size_after"] = len(ledger)
     (run_dir / "run_manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    logger.info("wrote %d posts to %s", len(posts_written), run_dir)
+    logger.info("wrote %d outreach drafts to %s", len(drafts), run_dir)
     return run_dir
 
 

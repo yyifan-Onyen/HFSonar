@@ -48,9 +48,10 @@ def cmd_poll(args: argparse.Namespace) -> int:
         repo_root=REPO_ROOT, cfg=cfg, operator=operator, ledger=ledger
     )
     print(f"\nrun complete: {run_dir.relative_to(REPO_ROOT)}")
-    posts = sorted((run_dir / "posts").glob("*.md")) if (run_dir / "posts").exists() else []
-    print(f"posts written: {len(posts)}")
-    for p in posts:
+    outreach_dir = run_dir / "outreach"
+    drafts = sorted(outreach_dir.glob("*.md")) if outreach_dir.exists() else []
+    print(f"outreach drafts written: {len(drafts)}")
+    for p in drafts:
         print(f"  - {p.relative_to(REPO_ROOT)}")
     return 0
 
@@ -101,9 +102,9 @@ def cmd_list(_args: argparse.Namespace) -> int:
         if not run_dir.is_dir():
             continue
         manifest = run_dir / "run_manifest.json"
-        post_count = (
-            len(list((run_dir / "posts").glob("*.md")))
-            if (run_dir / "posts").exists()
+        outreach_count = (
+            len(list((run_dir / "outreach").glob("*.md")))
+            if (run_dir / "outreach").exists()
             else 0
         )
         candidates = "?"
@@ -113,14 +114,14 @@ def cmd_list(_args: argparse.Namespace) -> int:
                 candidates = str(m.get("totals", {}).get("candidates", "?"))
             except Exception:
                 pass
-        rows.append((run_dir.name, candidates, post_count))
+        rows.append((run_dir.name, candidates, outreach_count))
     if not rows:
         print("no runs yet.")
         return 0
-    print(f"{'run_id':<22} {'candidates':>11} {'posts':>6}")
-    print("-" * 44)
-    for name, cand, posts in rows:
-        print(f"{name:<22} {cand:>11} {posts:>6}")
+    print(f"{'run_id':<22} {'candidates':>11} {'outreach':>9}")
+    print("-" * 47)
+    for name, cand, outreach in rows:
+        print(f"{name:<22} {cand:>11} {outreach:>9}")
     return 0
 
 

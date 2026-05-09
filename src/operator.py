@@ -1,11 +1,9 @@
 """Claude Code operator — subprocess wrapper around the `claude` CLI.
 
-Pattern borrowed from AutoX-AI-Labs/AutoR's `src/operator.py`, simplified for our
-use case: we don't need streaming or tool use, only single-shot prompt → text.
-
-Two operators with the same interface:
+Single-shot prompt → text. Two implementations:
 - ClaudeOperator: shells out to `claude -p @<prompt-file> --output-format json`
-- FakeOperator: deterministic stub for tests / token-free dev runs
+  Optional tools= list lets a step (e.g. author research) use WebFetch / WebSearch.
+- FakeOperator: deterministic stub for tests / token-free dev runs.
 """
 
 from __future__ import annotations
@@ -28,7 +26,13 @@ class OperatorResult:
 
 
 class Operator(Protocol):
-    def run(self, prompt_path: Path, *, label: str = "") -> OperatorResult: ...
+    def run(
+        self,
+        prompt_path: Path,
+        *,
+        label: str = "",
+        tools: list[str] | None = None,
+    ) -> OperatorResult: ...
 
 
 class ClaudeOperator:
@@ -53,7 +57,13 @@ class ClaudeOperator:
             )
         return resolved
 
-    def run(self, prompt_path: Path, *, label: str = "") -> OperatorResult:
+    def run(
+        self,
+        prompt_path: Path,
+        *,
+        label: str = "",
+        tools: list[str] | None = None,
+    ) -> OperatorResult:
         binary = self._resolve_binary()
         prompt_path = prompt_path.resolve()
         if not prompt_path.exists():
@@ -62,6 +72,10 @@ class ClaudeOperator:
         cmd = [binary, "-p", f"@{prompt_path}", "--output-format", "json"]
         if self.model:
             cmd += ["--model", self.model]
+        if tools:
+            # Whitelist only the requested tools for this call. The CLI accepts a
+            # comma-separated list via --allowedTools.
+            cmd += ["--allowedTools", ",".join(tools)]
 
         logger.info("[%s] invoking claude: %s", label or prompt_path.name, " ".join(cmd))
         try:
@@ -82,19 +96,15 @@ class ClaudeOperator:
             )
 
         stdout = proc.stdout.strip()
-        # `--output-format json` returns a single JSON object with `result` + meta.
         try:
             payload = json.loads(stdout)
         except json.JSONDecodeError:
-            # Fallback: treat raw stdout as the answer.
             return OperatorResult(text=stdout, raw=None)
 
         text = ""
         if isinstance(payload, dict):
-            # Newer CLI shape
             text = payload.get("result") or payload.get("response") or ""
             if not text and "messages" in payload:
-                # Some versions nest the assistant text in messages[-1].content[0].text
                 msgs = payload.get("messages") or []
                 if msgs and isinstance(msgs[-1], dict):
                     content = msgs[-1].get("content")
@@ -109,43 +119,79 @@ class ClaudeOperator:
 
 class FakeOperator:
     """Deterministic stub. Reads the prompt and emits a canned response derived
-    from the prompt's section markers, so the orchestrator and tests can run end-to-end
+    from the prompt's role marker, so the orchestrator and tests can run end-to-end
     with zero token spend.
     """
 
-    def run(self, prompt_path: Path, *, label: str = "") -> OperatorResult:
+    def run(
+        self,
+        prompt_path: Path,
+        *,
+        label: str = "",
+        tools: list[str] | None = None,
+    ) -> OperatorResult:
         prompt_text = prompt_path.read_text(encoding="utf-8")
         if "[ROLE: CURATOR]" in prompt_text:
             return OperatorResult(text=self._fake_curate(prompt_text))
-        if "[ROLE: WRITER]" in prompt_text:
-            return OperatorResult(text=self._fake_write(prompt_text))
+        if "[ROLE: RESEARCHER]" in prompt_text:
+            return OperatorResult(text=self._fake_research(prompt_text))
+        if "[ROLE: OUTREACH_DRAFTER]" in prompt_text:
+            return OperatorResult(text=self._fake_outreach(prompt_text))
         return OperatorResult(text="[fake-llm]")
 
     @staticmethod
     def _fake_curate(prompt: str) -> str:
-        # Pick the first up-to-3 candidate IDs we can find in the prompt.
         import re
 
         ids = re.findall(r"^- id: (.+)$", prompt, flags=re.MULTILINE)
         chosen = ids[:3]
         items = [
-            {"event_dedup_key": k, "angle": "fake angle for smoke testing"}
+            {
+                "event_dedup_key": k,
+                "angle": "fake angle for smoke testing — would ask about specific design choice",
+            }
             for k in chosen
         ]
         return json.dumps({"chosen": items}, ensure_ascii=False)
 
     @staticmethod
-    def _fake_write(prompt: str) -> str:
-        title_match = None
-        for line in prompt.splitlines():
-            if line.startswith("title:"):
-                title_match = line[len("title:") :].strip()
-                break
-        title = title_match or "Untitled"
+    def _fake_research(prompt: str) -> str:
+        # Pull the AUTHOR field from the prompt to make the fake output look plausible.
+        import re
+
+        m = re.search(r"^author / org \(from HF metadata\): (.+)$", prompt, flags=re.MULTILINE)
+        author_field = (m.group(1).strip() if m else "unknown") or "unknown"
+        return json.dumps(
+            {
+                "primary_author": {
+                    "name": author_field or "Unknown",
+                    "role": "model_owner",
+                    "affiliation": "",
+                    "email": "",
+                    "twitter": "",
+                    "github": "",
+                    "linkedin": "",
+                    "website": "",
+                    "huggingface": f"https://huggingface.co/{author_field}",
+                    "confidence": "name_only",
+                },
+                "coauthors": [],
+                "notes": "fake-llm: no real research performed; only HF profile URL inferred from author field.",
+            },
+            ensure_ascii=False,
+        )
+
+    @staticmethod
+    def _fake_outreach(prompt: str) -> str:
         return (
-            f"# {title}\n\n"
-            "*(fake-llm draft — set --fake-llm=false to invoke real Claude)*\n\n"
-            "- Why it matters: placeholder.\n"
-            "- What it is: placeholder.\n"
-            "- Where to look: placeholder URL.\n"
+            "**Channel:** email\n\n"
+            "**To:** <recipient name>\n\n"
+            "**Subject:** Loved your work on <topic>\n\n"
+            "---\n\n"
+            "*(fake-llm draft — set --fake-llm=false to invoke real Claude.)*\n\n"
+            "<First sentence: hook from curator's angle.>\n\n"
+            "<Body: one observation or question.>\n\n"
+            "<Ask: would you be open to a short async exchange?>\n\n"
+            "Best,\n"
+            "<your name>\n"
         )
